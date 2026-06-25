@@ -12,9 +12,12 @@ load_dotenv()
 
 app = FastAPI()
 
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
+_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()] or ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("ALLOWED_ORIGINS", "*").split(","),
+    allow_origins=_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
