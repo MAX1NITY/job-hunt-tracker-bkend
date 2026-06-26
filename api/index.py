@@ -2,7 +2,6 @@ import os
 from datetime import datetime
 from typing import Optional
 
-import jwt
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,14 +34,9 @@ security = HTTPBearer()
 
 def get_user_id(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
     try:
-        payload = jwt.decode(
-            credentials.credentials,
-            os.environ["SUPABASE_JWT_SECRET"],
-            algorithms=["HS256"],
-            audience="authenticated",
-        )
-        return payload["sub"]
-    except jwt.InvalidTokenError:
+        response = supabase.auth.get_user(credentials.credentials)
+        return response.user.id
+    except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
