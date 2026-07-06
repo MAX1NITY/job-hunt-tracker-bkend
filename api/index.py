@@ -1,15 +1,21 @@
 import os
-from datetime import datetime
-from typing import Optional
+from datetime import date, datetime
+from typing import Literal, Optional
 
+import sentry_sdk
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, field_validator
 from supabase import create_client
 
 load_dotenv()
+
+# No-op until SENTRY_DSN is set (e.g. as a Vercel env var) -- keeps local dev,
+# tests, and CI free of any Sentry network calls or account requirement.
+if sentry_dsn := os.getenv("SENTRY_DSN"):
+    sentry_sdk.init(dsn=sentry_dsn, traces_sample_rate=0.1)
 
 app = FastAPI()
 
@@ -40,15 +46,32 @@ def get_user_id(credentials: HTTPAuthorizationCredentials = Depends(security)) -
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
+STATUSES = ("Not Contacted", "Messaged", "Replied", "Interview", "Closed")
+
+
 class ContactIn(BaseModel):
     name: str
     role: Optional[str] = None
     company: str
-    email: Optional[str] = None
+    email: Optional[EmailStr] = None
     linkedinUrl: Optional[str] = None
-    status: str = "Not Contacted"
-    followUpDate: Optional[str] = None
+    status: Literal[STATUSES] = "Not Contacted"
+    followUpDate: Optional[date] = None
     notes: Optional[str] = None
+
+    @field_validator("name", "company")
+    @classmethod
+    def not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("must not be blank")
+        return v.strip()
+
+    @field_validator("email", "followUpDate", mode="before")
+    @classmethod
+    def blank_string_to_none(cls, v):
+        # The frontend sends "" for unset optional fields; EmailStr/date
+        # reject "" outright, so treat blank the same as omitted.
+        return v or None
 
 
 def to_row(data: dict, user_id: str = None) -> dict:
@@ -98,7 +121,7 @@ def get_contacts(user_id: str = Depends(get_user_id)):
 
 @app.post("/contacts", status_code=201)
 def create_contact(body: ContactIn, user_id: str = Depends(get_user_id)):
-    row = to_row(body.model_dump(), user_id=user_id)
+    row = to_row(body.model_dump(mode="json"), user_id=user_id)
     row.pop("updated_at", None)
     res = supabase.table(TABLE).insert(row).execute()
     return to_contact(res.data[0])
@@ -106,7 +129,7 @@ def create_contact(body: ContactIn, user_id: str = Depends(get_user_id)):
 
 @app.put("/contacts/{contact_id}")
 def update_contact(contact_id: str, body: ContactIn, user_id: str = Depends(get_user_id)):
-    row = to_row(body.model_dump())
+    row = to_row(body.model_dump(mode="json"))
     res = (
         supabase.table(TABLE)
         .update(row)
