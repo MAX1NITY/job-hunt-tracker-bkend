@@ -161,3 +161,118 @@ def update_contact(contact_id: UUID, body: ContactIn):
 @app.delete("/contacts/{contact_id}", status_code=204, dependencies=[Depends(require_access_key)])
 def delete_contact(contact_id: UUID):
     run(f"DELETE FROM {TABLE} WHERE id = %s", (contact_id,))
+
+
+# --- Applications: jobs applied to, optionally linked to a contact ---
+
+APP_TABLE = "applications"
+APP_COLUMNS = (
+    "id, company, role, job_url, applied_date, status, source, contact_id, "
+    "next_step, next_step_date, work_mode, job_description, notes, created_at, updated_at"
+)
+APP_STATUSES = ("Applied", "Screening", "Interview", "Offer", "Rejected", "Withdrawn", "Ghosted")
+WORK_MODES = ("On-site", "Hybrid", "Remote")
+
+
+class ApplicationIn(BaseModel):
+    company: str
+    role: str
+    jobUrl: Optional[str] = None
+    appliedDate: Optional[date] = None
+    status: Literal[APP_STATUSES] = "Applied"
+    source: Optional[str] = None
+    contactId: Optional[UUID] = None
+    nextStep: Optional[str] = None
+    nextStepDate: Optional[date] = None
+    workMode: Optional[Literal[WORK_MODES]] = None
+    jobDescription: Optional[str] = None
+    notes: Optional[str] = None
+
+    @field_validator("company", "role")
+    @classmethod
+    def not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("must not be blank")
+        return v.strip()
+
+    @field_validator("appliedDate", "nextStepDate", "contactId", "workMode", mode="before")
+    @classmethod
+    def blank_string_to_none(cls, v):
+        return v or None
+
+
+def to_app_row(data: dict) -> dict:
+    return {
+        "company": data.get("company"),
+        "role": data.get("role"),
+        "job_url": data.get("jobUrl"),
+        "applied_date": data.get("appliedDate"),
+        "status": data.get("status"),
+        "source": data.get("source"),
+        "contact_id": data.get("contactId"),
+        "next_step": data.get("nextStep"),
+        "next_step_date": data.get("nextStepDate"),
+        "work_mode": data.get("workMode"),
+        "job_description": data.get("jobDescription"),
+        "notes": data.get("notes"),
+    }
+
+
+def to_application(row: dict) -> dict:
+    d = lambda v: str(v) if v else None  # noqa: E731
+    return {
+        "id": str(row["id"]),
+        "company": row["company"],
+        "role": row["role"],
+        "jobUrl": row.get("job_url") or "",
+        "appliedDate": d(row.get("applied_date")),
+        "status": row["status"],
+        "source": row.get("source") or "",
+        "contactId": d(row.get("contact_id")),
+        "nextStep": row.get("next_step") or "",
+        "nextStepDate": d(row.get("next_step_date")),
+        "workMode": row.get("work_mode") or "",
+        "jobDescription": row.get("job_description") or "",
+        "notes": row.get("notes") or "",
+        "createdAt": _iso(row.get("created_at")),
+        "updatedAt": _iso(row.get("updated_at")),
+    }
+
+
+_APP_FIELDS = list(to_app_row({}).keys())
+
+
+@app.get("/applications", dependencies=[Depends(require_access_key)])
+def get_applications():
+    rows = run(f"SELECT {APP_COLUMNS} FROM {APP_TABLE} ORDER BY created_at DESC")
+    return [to_application(r) for r in rows]
+
+
+@app.post("/applications", status_code=201, dependencies=[Depends(require_access_key)])
+def create_application(body: ApplicationIn):
+    cols = ", ".join(_APP_FIELDS)
+    vals = ", ".join(f"%({f})s" for f in _APP_FIELDS)
+    rows = run(
+        f"INSERT INTO {APP_TABLE} ({cols}) VALUES ({vals}) RETURNING {APP_COLUMNS}",
+        to_app_row(body.model_dump(mode="json")),
+    )
+    return to_application(rows[0])
+
+
+@app.put("/applications/{application_id}", dependencies=[Depends(require_access_key)])
+def update_application(application_id: UUID, body: ApplicationIn):
+    row = to_app_row(body.model_dump(mode="json"))
+    row["id"] = application_id
+    sets = ", ".join(f"{f} = %({f})s" for f in _APP_FIELDS)
+    rows = run(
+        f"UPDATE {APP_TABLE} SET {sets}, updated_at = now() WHERE id = %(id)s RETURNING {APP_COLUMNS}",
+        row,
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Application not found")
+    return to_application(rows[0])
+
+
+@app.delete("/applications/{application_id}", status_code=204, dependencies=[Depends(require_access_key)])
+def delete_application(application_id: UUID):
+    run(f"DELETE FROM {APP_TABLE} WHERE id = %s", (application_id,))
