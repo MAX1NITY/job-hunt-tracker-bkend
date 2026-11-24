@@ -3,40 +3,37 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# api/index.py reads these at import time (os.environ["SUPABASE_URL"], etc.),
-# so they must exist before the module is ever imported.
-os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
-# The supabase client validates this looks like a JWT (header.payload.signature)
-# before it'll even construct a client, so a plain string won't do.
-os.environ.setdefault("SUPABASE_SERVICE_KEY", "fake.fake.fake")
+# Endpoints read APP_ACCESS_KEY at request time; DATABASE_URL is only read
+# inside run(), which tests replace, so no database is ever contacted.
+os.environ["APP_ACCESS_KEY"] = "test-key"
+os.environ.setdefault("DATABASE_URL", "postgresql://user:pw@localhost/none")
 os.environ.setdefault("ALLOWED_ORIGINS", "http://localhost:5173")
 
 from fastapi.testclient import TestClient
 
 from api import index as api_index
 
+KEY = {"X-Access-Key": "test-key"}
+
 
 @pytest.fixture
-def fake_supabase(monkeypatch):
-    """Replace the module-level `supabase` client with a MagicMock so tests
-    never touch the network. Each test gets a fresh mock and configures the
-    query chain it needs (e.g. fake_supabase.table.return_value.select...).
+def fake_run(monkeypatch):
+    """Replace api.index.run (the single DB seam) with a MagicMock so tests
+    never touch a database. Configure fake_run.return_value per test and
+    inspect fake_run.call_args for the SQL and params that were sent.
     """
-    mock = MagicMock()
-    monkeypatch.setattr(api_index, "supabase", mock)
+    mock = MagicMock(return_value=[])
+    monkeypatch.setattr(api_index, "run", mock)
     return mock
 
 
 @pytest.fixture
-def client(fake_supabase):
+def client(fake_run):
     return TestClient(api_index.app)
 
 
 @pytest.fixture
 def auth_client(client):
-    """A client where the auth dependency is overridden, so endpoint tests
-    don't need a real (or fake) JWT — only the auth-specific tests do.
-    """
-    api_index.app.dependency_overrides[api_index.get_user_id] = lambda: "user-123"
-    yield client
-    api_index.app.dependency_overrides.clear()
+    """A client that sends the correct access key on every request."""
+    client.headers.update(KEY)
+    return client

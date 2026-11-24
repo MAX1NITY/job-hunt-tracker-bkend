@@ -25,12 +25,10 @@ def test_to_row_empty_follow_up_date_becomes_none():
     assert row["follow_up_date"] is None
 
 
-def test_to_row_attaches_user_id_only_when_given():
-    with_user = to_row({"name": "Ada", "company": "X"}, user_id="user-123")
-    without_user = to_row({"name": "Ada", "company": "X"})
-
-    assert with_user["user_id"] == "user-123"
-    assert "user_id" not in without_user
+def test_to_row_has_no_user_or_timestamp_columns():
+    row = to_row({"name": "Ada", "company": "X"})
+    assert "user_id" not in row
+    assert "updated_at" not in row  # the database sets it
 
 
 def test_to_contact_maps_snake_case_to_camelcase_and_fills_blanks():
@@ -55,3 +53,16 @@ def test_to_contact_stringifies_follow_up_date():
         "follow_up_date": "2026-08-01",
     })
     assert contact["followUpDate"] == "2026-08-01"
+
+
+def test_to_contact_stringifies_uuid_and_isoformats_datetimes():
+    from datetime import datetime, timezone
+    from uuid import UUID
+
+    contact = to_contact({
+        "id": UUID("11111111-1111-1111-1111-111111111111"),
+        "name": "Ada", "company": "X", "status": "Replied",
+        "created_at": datetime(2026, 7, 1, tzinfo=timezone.utc),
+    })
+    assert contact["id"] == "11111111-1111-1111-1111-111111111111"
+    assert contact["createdAt"].startswith("2026-07-01")

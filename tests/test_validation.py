@@ -14,16 +14,15 @@ def test_rejects_invalid_email(auth_client):
     assert res.status_code == 422
 
 
-def test_accepts_blank_email_as_unset(auth_client, fake_supabase):
-    fake_supabase.table.return_value.insert.return_value.execute.return_value.data = [{
+def test_accepts_blank_email_as_unset(auth_client, fake_run):
+    fake_run.return_value = [{
         "id": "1", "name": "Ada", "company": "Acme", "status": "Not Contacted",
     }]
 
     res = auth_client.post("/contacts", json={"name": "Ada", "company": "Acme", "email": ""})
 
     assert res.status_code == 201
-    inserted_row = fake_supabase.table.return_value.insert.call_args[0][0]
-    assert inserted_row["email"] is None
+    assert fake_run.call_args.args[1]["email"] is None
 
 
 def test_rejects_invalid_follow_up_date(auth_client):
@@ -38,8 +37,8 @@ def test_rejects_unknown_status(auth_client):
     assert res.status_code == 422
 
 
-def test_accepts_valid_follow_up_date_as_iso_string(auth_client, fake_supabase):
-    fake_supabase.table.return_value.insert.return_value.execute.return_value.data = [{
+def test_accepts_valid_follow_up_date_as_iso_string(auth_client, fake_run):
+    fake_run.return_value = [{
         "id": "1", "name": "Ada", "company": "Acme", "status": "Not Contacted",
     }]
 
@@ -48,5 +47,4 @@ def test_accepts_valid_follow_up_date_as_iso_string(auth_client, fake_supabase):
     )
 
     assert res.status_code == 201
-    inserted_row = fake_supabase.table.return_value.insert.call_args[0][0]
-    assert inserted_row["follow_up_date"] == "2026-08-01"
+    assert fake_run.call_args.args[1]["follow_up_date"] == "2026-08-01"
