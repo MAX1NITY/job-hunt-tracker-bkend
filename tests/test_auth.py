@@ -1,43 +1,38 @@
-"""get_user_id is the dependency that turns a Bearer token into a Supabase
-user id (or a 401). It's tested in isolation here, separate from the CRUD
-endpoint tests, which override this dependency entirely so they can focus
-on request/response shape instead of auth.
+"""The access-key check: one shared secret in the X-Access-Key header.
+The CRUD endpoint tests send the right key via `auth_client`; the cases here
+cover missing, wrong and unconfigured keys, and that a refused request never
+reaches the database.
 """
-from unittest.mock import MagicMock
-
-import pytest
-from fastapi import HTTPException
-from fastapi.security import HTTPAuthorizationCredentials
-
-from api.index import get_user_id
 
 
-def test_get_user_id_returns_id_for_valid_token(fake_supabase):
-    fake_supabase.auth.get_user.return_value = MagicMock(user=MagicMock(id="user-123"))
-    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="valid-token")
-
-    assert get_user_id(creds) == "user-123"
-    fake_supabase.auth.get_user.assert_called_once_with("valid-token")
-
-
-def test_get_user_id_raises_401_for_invalid_token(fake_supabase):
-    fake_supabase.auth.get_user.side_effect = Exception("token expired")
-    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="bad-token")
-
-    with pytest.raises(HTTPException) as exc_info:
-        get_user_id(creds)
-
-    assert exc_info.value.status_code == 401
-
-
-def test_endpoint_rejects_missing_authorization_header(client):
-    # No Authorization header at all -> HTTPBearer itself rejects the request
-    # before get_user_id ever runs.
+def test_missing_key_is_rejected(client, fake_run):
     res = client.get("/contacts")
-    assert res.status_code == 403  # FastAPI's HTTPBearer default for "missing"
-
-
-def test_endpoint_rejects_invalid_token(client, fake_supabase):
-    fake_supabase.auth.get_user.side_effect = Exception("bad token")
-    res = client.get("/contacts", headers={"Authorization": "Bearer bad-token"})
     assert res.status_code == 401
+    fake_run.assert_not_called()
+
+
+def test_wrong_key_is_rejected(client, fake_run):
+    res = client.get("/contacts", headers={"X-Access-Key": "nope"})
+    assert res.status_code == 401
+    fake_run.assert_not_called()
+
+
+def test_correct_key_is_accepted(client, fake_run):
+    res = client.get("/contacts", headers={"X-Access-Key": "test-key"})
+    assert res.status_code == 200
+
+
+def test_fails_closed_when_server_key_not_configured(client, fake_run, monkeypatch):
+    monkeypatch.delenv("APP_ACCESS_KEY")
+    res = client.get("/contacts", headers={"X-Access-Key": "anything"})
+    assert res.status_code == 503
+    fake_run.assert_not_called()
+
+
+def test_every_write_endpoint_requires_the_key(client, fake_run):
+    body = {"name": "Ada", "company": "X"}
+    cid = "11111111-1111-1111-1111-111111111111"
+    assert client.post("/contacts", json=body).status_code == 401
+    assert client.put(f"/contacts/{cid}", json=body).status_code == 401
+    assert client.delete(f"/contacts/{cid}").status_code == 401
+    fake_run.assert_not_called()

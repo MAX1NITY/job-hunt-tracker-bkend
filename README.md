@@ -1,15 +1,14 @@
 # Job Hunt Tracker — Backend
 
 FastAPI backend for the [Job Hunt Tracker](https://github.com/MAX1NITY/job-hunt-tracker-frntend)
-frontend. Exposes CRUD endpoints over a `contacts` table in Supabase
-(Postgres), with every request authenticated via a Supabase-issued JWT.
+frontend. Exposes CRUD endpoints over a `contacts` table in Neon
+(Postgres). It is a single-user app: there are no accounts, and every request
+must carry one shared secret in the `X-Access-Key` header.
 
 **Live:** https://job-hunt-tracker-bkend.vercel.app
 
-For the reasoning behind the auth model, RLS, and CORS setup, see the
-[case study](https://github.com/MAX1NITY/job-hunt-tracker-frntend/blob/main/docs/case-study.md)
-in the frontend repo (it covers the full-stack picture; this README covers
-running and testing this service specifically).
+Note: the frontend case study describes the earlier Supabase/Google-login
+design. This service now uses Neon and a single access key instead.
 
 ## Setup
 
@@ -18,15 +17,15 @@ python -m venv .venv
 .venv\Scripts\activate          # Windows
 pip install -r requirements-dev.txt
 
-cp .env.example .env             # fill in your Supabase project's values
+cp .env.example .env             # fill in your Neon connection string and an access key
 uvicorn api.index:app --reload
 ```
 
 ## Environment Variables
 
 ```
-SUPABASE_URL=
-SUPABASE_SERVICE_KEY=            # service_role key — bypasses RLS, server-only, never expose to a client
+DATABASE_URL=                    # Neon connection string (use the pooled one)
+APP_ACCESS_KEY=                  # long random secret; the frontend sends it as X-Access-Key. Unset = every request refused (503)
 ALLOWED_ORIGINS=                 # comma-separated, or * to allow any origin
 SENTRY_DSN=                      # optional — leave blank to disable error monitoring
 ```
@@ -37,14 +36,13 @@ SENTRY_DSN=                      # optional — leave blank to disable error mon
 pytest -v
 ```
 
-Tests mock the Supabase client entirely (`tests/conftest.py`), so they run
-with no network access and no real database. They're split by concern:
+Tests replace the single database seam, `run()` (`tests/conftest.py`), so
+they run with no network access and no real database. They're split by concern:
 
 - `tests/test_conversions.py` — pure `to_row`/`to_contact` mapping functions
-- `tests/test_auth.py` — the JWT-to-user-id dependency, valid and invalid tokens
-- `tests/test_contacts_api.py` — CRUD endpoints, with auth mocked via
-  `app.dependency_overrides` so these tests focus on request/response shape
-  and on the `user_id` scoping that keeps users' data separate
+- `tests/test_auth.py` — the access-key check: missing, wrong, and unconfigured keys
+- `tests/test_contacts_api.py` — CRUD endpoints, sending the right key so these
+  tests focus on request/response shape and the SQL parameters
 - `tests/test_validation.py` — the pydantic validators on `ContactIn`
   (blank names, malformed email/date, unknown status values)
 
@@ -68,12 +66,11 @@ to turn it on.
 
 ## Endpoints
 
-All endpoints require `Authorization: Bearer <supabase-jwt>` and operate only
-on the authenticated user's own contacts.
+All endpoints require the header `X-Access-Key: <APP_ACCESS_KEY>`.
 
 | Method | Path              | |
 |--------|-------------------|---|
-| GET    | `/contacts`       | List the user's contacts |
+| GET    | `/contacts`       | List contacts |
 | POST   | `/contacts`       | Create a contact |
-| PUT    | `/contacts/{id}`  | Update a contact (404 if not found or not owned) |
+| PUT    | `/contacts/{id}`  | Update a contact (404 if not found; 422 if the id isn't a UUID) |
 | DELETE | `/contacts/{id}`  | Delete a contact |
